@@ -8,33 +8,25 @@ use DBIx::Sunny;
 use Digest::SHA qw/ sha256_hex /;
 use Data::Dumper;
 
+
 sub config {
   my ($self) = @_;
   $self->{_config} ||= {
-    user_lock_threshold => $ENV{'ISU4_USER_LOCK_THRESHOLD'} || 3,
-    ip_ban_threshold => $ENV{'ISU4_IP_BAN_THRESHOLD'} || 10
+    user_lock_threshold => 3,
+    ip_ban_threshold    => 10
   };
 };
 
 sub db {
   my ($self) = @_;
-  my $host = $ENV{ISU4_DB_HOST} || '127.0.0.1';
-  my $port = $ENV{ISU4_DB_PORT} || 3306;
-  my $username = $ENV{ISU4_DB_USER} || 'root';
-  my $password = $ENV{ISU4_DB_PASSWORD};
-  my $database = $ENV{ISU4_DB_NAME} || 'isu4_qualifier';
 
-  $self->{_db} ||= do {
-    DBIx::Sunny->connect(
-      "dbi:mysql:database=$database;host=$host;port=$port", $username, $password, {
-        RaiseError => 1,
-        PrintError => 0,
-        AutoInactiveDestroy => 1,
-        mysql_enable_utf8   => 1,
-        mysql_auto_reconnect => 1,
-      },
+  unless ($self->{_db}) {
+    $self->{_db} = DBIx::Sunny->connect(
+      "dbi:mysql:database=isu4_qualifier;host=localhost;port=3306", 'root', ''
     );
-  };
+  }
+
+  $self->{_db}
 }
 
 sub calculate_password_hash {
@@ -115,10 +107,27 @@ sub banned_ips {
     push @ips, $row->{ip};
   }
 
-  my $last_succeeds = $self->db->select_all('SELECT ip, MAX(id) AS last_login_id FROM login_log WHERE succeeded = 1 GROUP by ip');
+  my $last_succeeds = $self->db->select_all(q{
+SELECT 
+  ip, MAX(id) AS last_login_id 
+FROM 
+  login_log
+WHERE 
+  succeeded = 1 
+GROUP 
+  by ip}
+	);
 
   foreach my $row (@$last_succeeds) {
-    my $count = $self->db->select_one('SELECT COUNT(*) AS cnt FROM login_log WHERE ip = ? AND ? < id', $row->{ip}, $row->{last_login_id});
+    my $count = $self->db->select_one(q{
+SELECT 
+  COUNT(*) AS cnt 
+FROM 
+  login_log 
+WHERE 
+  ip = ? AND ? < id
+		}, $row->{ip}, $row->{last_login_id});
+
     if ($threshold <= $count) {
       push @ips, $row->{ip};
     }
@@ -129,19 +138,40 @@ sub banned_ips {
 
 sub locked_users {
   my ($self) = @_;
-  my @user_ids;
   my $threshold = $self->config->{user_lock_threshold};
 
-  my $not_succeeded = $self->db->select_all('SELECT user_id, login FROM (SELECT user_id, login, MAX(succeeded) as max_succeeded, COUNT(*) as cnt FROM login_log GROUP BY user_id) AS t0 WHERE t0.user_id IS NOT NULL AND t0.max_succeeded = 0 AND t0.cnt >= ?', $threshold);
+  my $not_succeeded = $self->db->select_all(q{
+SELECT
+  user_id, login
+FROM
+  (SELECT user_id, login, MAX(succeeded) as max_succeeded, COUNT(*) as cnt FROM login_log GROUP BY user_id) AS t0
+WHERE
+  t0.user_id IS NOT NULL AND t0.max_succeeded = 0 AND t0.cnt >= ?
+  }, $threshold);
 
+  my @user_ids;
   foreach my $row (@$not_succeeded) {
     push @user_ids, $row->{login};
   }
 
-  my $last_succeeds = $self->db->select_all('SELECT user_id, login, MAX(id) AS last_login_id FROM login_log WHERE user_id IS NOT NULL AND succeeded = 1 GROUP BY user_id');
+  my $last_succeeds = $self->db->select_all(q{
+SELECT
+  user_id, login, MAX(id) AS last_login_id
+FROM
+  login_log
+WHERE
+  user_id IS NOT NULL AND succeeded = 1
+GROUP BY user_id
+  });
 
   foreach my $row (@$last_succeeds) {
-    my $count = $self->db->select_one('SELECT COUNT(*) AS cnt FROM login_log WHERE user_id = ? AND ? < id', $row->{user_id}, $row->{last_login_id});
+    my $count = $self->db->select_one(q{
+SELECT
+  COUNT(*) AS cnt
+FROM
+  login_log
+WHERE user_id = ? AND ? < id
+  }, $row->{user_id}, $row->{last_login_id});
     if ($threshold <= $count) {
       push @user_ids, $row->{login};
     }
@@ -152,10 +182,12 @@ sub locked_users {
 
 sub login_log {
   my ($self, $succeeded, $login, $ip, $user_id) = @_;
-  $self->db->query(
-    'INSERT INTO login_log (`created_at`, `user_id`, `login`, `ip`, `succeeded`) VALUES (NOW(),?,?,?,?)',
-    $user_id, $login, $ip, ($succeeded ? 1 : 0)
-  );
+  $self->db->query(q{
+INSERT INTO 
+  login_log (`created_at`, `user_id`, `login`, `ip`, `succeeded`) 
+VALUES 
+  (NOW(),?,?,?,?)
+  }, $user_id, $login, $ip, ($succeeded ? 1 : 0));
 };
 
 sub set_flash {

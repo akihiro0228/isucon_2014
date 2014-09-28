@@ -9,6 +9,4 @@ requires "DBD::mysql";
 requires "Starman";
 requires "Plack::Session";
 requires "Data::Dumper";
-
-requires "Plack::Middleware::Profiler::NYTProf";
-requires "DateTime";
+requires "Starlet";
