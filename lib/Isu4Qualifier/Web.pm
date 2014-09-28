@@ -54,10 +54,17 @@ sub ip_banned {
 
 sub attempt_login {
   my ($self, $login, $password, $ip) = @_;
-  my $user = $self->db->select_row('SELECT * FROM users WHERE login = ?', $login);
+  my $user = $self->db->select_row('SELECT id, salt, password_hash FROM users WHERE login = ?', $login);
+
+  unless ($user) {
+    $self->login_log(0, $login, $ip);
+    return undef, 'wrong_login';
+  }
+
+  # BAN チェック
 
   if ($self->ip_banned($ip)) {
-    $self->login_log(0, $login, $ip, $user ? $user->{id} : undef);
+    $self->login_log(0, $login, $ip, $user->{id});
     return undef, 'banned';
   }
 
@@ -66,24 +73,22 @@ sub attempt_login {
     return undef, 'locked';
   }
 
-  if ($user && calculate_password_hash($password, $user->{salt}) eq $user->{password_hash}) {
+
+
+  # OK!
+  if (calculate_password_hash($password, $user->{salt}) eq $user->{password_hash}) {
     $self->login_log(1, $login, $ip, $user->{id});
     return $user, undef;
   }
-  elsif ($user) {
-    $self->login_log(0, $login, $ip, $user->{id});
-    return undef, 'wrong_password';
-  }
-  else {
-    $self->login_log(0, $login, $ip);
-    return undef, 'wrong_login';
-  }
+
+  $self->login_log(0, $login, $ip, $user->{id});
+  return undef, 'wrong_password';
 };
 
 sub current_user {
   my ($self, $user_id) = @_;
 
-  $self->db->select_row('SELECT * FROM users WHERE id = ?', $user_id);
+  $self->db->select_one('SELECT id FROM users WHERE id = ?', $user_id);
 };
 
 sub last_login {
@@ -221,7 +226,6 @@ get '/' => [qw(session)] => sub {
 
 post '/login' => sub {
   my ($self, $c) = @_;
-  my $msg;
 
   my ($user, $err) = $self->attempt_login(
     $c->req->param('login'),
@@ -250,10 +254,8 @@ post '/login' => sub {
 get '/mypage' => [qw(session)] => sub {
   my ($self, $c) = @_;
   my $user_id = $c->req->env->{'psgix.session'}->{user_id};
-  my $user = $self->current_user($user_id);
-  my $msg;
 
-  if ($user) {
+  if ($self->current_user($user_id)) {
     $c->render('mypage.tx', { last_login => $self->last_login($user_id) });
   }
   else {
