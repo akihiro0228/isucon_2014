@@ -54,7 +54,7 @@ sub ip_banned {
 
 sub attempt_login {
   my ($self, $login, $password, $ip) = @_;
-  my $user = $self->db->select_row('SELECT id, salt, password_hash FROM users WHERE login = ?', $login);
+  my $user = $self->db->select_row('SELECT * FROM users WHERE login = ?', $login);
 
   unless ($user) {
     $self->login_log(0, $login, $ip);
@@ -94,9 +94,16 @@ sub current_user {
 sub last_login {
   my ($self, $user_id) = @_;
 
-  my $logs = $self->db->select_all(
-   'SELECT * FROM login_log WHERE succeeded = 1 AND user_id = ? ORDER BY id DESC LIMIT 2',
-   $user_id);
+  my $logs = $self->db->select_all(q{
+SELECT
+   created_at,  user_id, ip, succeeded, login
+FROM 
+  login_log
+WHERE 
+  succeeded = 1 AND user_id = ? 
+ORDER BY 
+  id DESC LIMIT 2
+	},$user_id);
 
   @$logs[-1];
 };
@@ -106,7 +113,14 @@ sub banned_ips {
   my @ips;
   my $threshold = $self->config->{ip_ban_threshold};
 
-  my $not_succeeded = $self->db->select_all('SELECT ip FROM (SELECT ip, MAX(succeeded) as max_succeeded, COUNT(*) as cnt FROM login_log GROUP BY ip) AS t0 WHERE t0.max_succeeded = 0 AND t0.cnt >= ?', $threshold);
+  my $not_succeeded = $self->db->select_all(q{
+SELECT
+  ip 
+FROM 
+  (SELECT ip, MAX(succeeded) as max_succeeded, COUNT(*) as cnt FROM login_log GROUP BY ip) AS t0 
+WHERE
+  t0.max_succeeded = 0 AND t0.cnt >= ?
+  }, $threshold);
 
   foreach my $row (@$not_succeeded) {
     push @ips, $row->{ip};
